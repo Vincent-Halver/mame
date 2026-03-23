@@ -34,6 +34,7 @@ public:
 		, m_dmadac(*this, "dac%u", 1U)
 	{ }
 
+	void cdi_base(machine_config& config);
 	void cdimono1_base(machine_config &config);
 	void cdimono1(machine_config &config);
 	void cdimono2(machine_config &config);
@@ -102,13 +103,10 @@ private:
 
 	TIMER_CALLBACK_MEMBER(boot_press_tick);
 
-	uint8_t mcu_p0_r();
+	template<uint8_t> uint8_t mcu_p_r();
 	uint8_t mcu_p1_r();
-	uint8_t mcu_p2_r();
 	uint8_t mcu_p3_r();
-	void mcu_p0_w(uint8_t data);
-	void mcu_p1_w(uint8_t data);
-	void mcu_p2_w(uint8_t data);
+	template<uint8_t> void mcu_p_w(uint8_t data);
 	void mcu_p3_w(uint8_t data);
 
 	void mcu_rx_from_cpu(uint8_t data);

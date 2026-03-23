@@ -296,10 +296,10 @@ void quizard_state::mcu_rx_from_cpu(uint8_t data)
 	transmit_register_setup(data);
 }
 
-uint8_t quizard_state::mcu_p0_r()
+template<uint8_t N> uint8_t quizard_state::mcu_p_r()
 {
-	const uint8_t data = m_inputs[0]->read();
-	LOGMASKED(LOG_QUIZARD_READS, "%s: MCU Port 0 Read (%02x)\n", machine().describe_context(), data);
+	const uint8_t data = m_inputs[N]->read();
+	LOGMASKED(LOG_QUIZARD_READS, "%s: MCU Port %d Read (%02x)\n", machine().describe_context(), N, data);
 	return data;
 }
 
@@ -312,32 +312,15 @@ uint8_t quizard_state::mcu_p1_r()
 	return data;
 }
 
-uint8_t quizard_state::mcu_p2_r()
-{
-	const uint8_t data = m_inputs[2]->read();
-	LOGMASKED(LOG_QUIZARD_READS, "%s: MCU Port 2 Read (%02x)\n", machine().describe_context(), data);
-	return data;
-}
-
 uint8_t quizard_state::mcu_p3_r()
 {
 	LOGMASKED(LOG_QUIZARD_READS, "%s: MCU Port 3 Read (%02x)\n", machine().describe_context(), m_mcu_p3);
 	return m_mcu_p3;
 }
 
-void quizard_state::mcu_p0_w(uint8_t data)
+template<uint8_t N> void quizard_state::mcu_p_w(uint8_t data)
 {
-	LOGMASKED(LOG_QUIZARD_WRITES, "%s: MCU Port 0 Write (%02x)\n", machine().describe_context(), data);
-}
-
-void quizard_state::mcu_p1_w(uint8_t data)
-{
-	LOGMASKED(LOG_QUIZARD_WRITES, "%s: MCU Port 1 Write (%02x)\n", machine().describe_context(), data);
-}
-
-void quizard_state::mcu_p2_w(uint8_t data)
-{
-	LOGMASKED(LOG_QUIZARD_WRITES, "%s: MCU Port 2 Write (%02x)\n", machine().describe_context(), data);
+	LOGMASKED(LOG_QUIZARD_WRITES, "%s: MCU Port %d Write (%02x)\n", machine().describe_context(), N, data);
 }
 
 void quizard_state::mcu_p3_w(uint8_t data)
@@ -403,18 +386,12 @@ uint32_t cdi_state::screen_update_cdimono1_lcd(screen_device &screen, bitmap_rgb
 
 		for (int lcd = 0; lcd < 8; lcd++)
 		{
-			uint16_t data = (m_slave_hle->get_lcd_state()[lcd*2] << 8) |
-							m_slave_hle->get_lcd_state()[lcd*2 + 1];
+			auto state = &m_slave_hle->get_lcd_state()[lcd * 2];
+			uint16_t data = (state[0] << 8) | state[1];
 			for (int x = 0; x < 20; x++)
 			{
-				if (data & cdi220_lcd_char[y*20 + x])
-				{
-					scanline[(7 - lcd)*24 + x] = rgb_t::white();
-				}
-				else
-				{
-					scanline[(7 - lcd)*24 + x] = rgb_t::black();
-				}
+				bool isOn = data & cdi220_lcd_char[y * 20 + x];
+				scanline[(7 - lcd)*24 + x] = isOn ? rgb_t::white() : rgb_t::black();
 			}
 		}
 	}
@@ -426,32 +403,53 @@ uint32_t cdi_state::screen_update_cdimono1_lcd(screen_device &screen, bitmap_rgb
 *    Machine Drivers     *
 *************************/
 
-// CD-i Mono-I system base
-void cdi_state::cdimono1_base(machine_config &config)
+// CD-i system base
+void cdi_state::cdi_base(machine_config& config)
 {
 	SCC68070(config, m_maincpu, CLOCK_A);
-	m_maincpu->set_addrmap(AS_PROGRAM, &cdi_state::cdimono1_mem);
-	m_maincpu->iack4_callback().set(m_cdic, FUNC(cdicdic_device::intack_r));
+	// Skip Device specific program memory
 
 	MCD212(config, m_mcd212, CLOCK_A, m_plane_ram[0], m_plane_ram[1]);
 	m_mcd212->set_screen("screen");
 	m_mcd212->int_callback().set(m_maincpu, FUNC(scc68070_device::int1_w));
 
 	screen_device &screen(SCREEN(config, "screen", SCREEN_TYPE_RASTER));
-	screen.set_raw(960*(312*2-32)*50, 960, 0, 768, 312*2-32, 32, 312*2-32);
+	int lines = 312 * 2 - 32;
+	screen.set_raw(960 * lines * 50, 960, 0, 768, lines, 32, lines);
 	screen.set_video_attributes(VIDEO_UPDATE_SCANLINE);
 	screen.set_screen_update(m_mcd212, FUNC(mcd212_device::screen_update));
+	m_lcd->set_screen_update(FUNC(cdi_state::screen_update_cdimono1_lcd));
 
 	SCREEN(config, m_lcd, SCREEN_TYPE_RASTER);
-	m_lcd->set_refresh_hz(50);
 	m_lcd->set_vblank_time(ATTOSECONDS_IN_USEC(0));
 	m_lcd->set_size(192, 22);
 	m_lcd->set_visarea(0, 192-1, 0, 22-1);
-	m_lcd->set_screen_update(FUNC(cdi_state::screen_update_cdimono1_lcd));
 
 	PALETTE(config, "palette").set_entries(0x100);
-
 	config.set_default_layout(layout_cdi);
+
+	CDROM(config, m_cdrom).set_interface("cdrom");
+
+	/* sound hardware */
+	SPEAKER(config, "speaker", 2).front();
+
+	DMADAC(config, m_dmadac[0]);
+	m_dmadac[0]->add_route(ALL_OUTPUTS, "speaker", 1.0, 0);
+
+	DMADAC(config, m_dmadac[1]);
+	m_dmadac[1]->add_route(ALL_OUTPUTS, "speaker", 1.0, 1);
+
+	MK48T08(config, "mk48t08");
+}
+
+// CD-i Mono-I system base
+void cdi_state::cdimono1_base(machine_config &config)
+{
+	cdi_base(config);
+	m_maincpu->set_addrmap(AS_PROGRAM, &cdi_state::cdimono1_mem);
+	m_maincpu->iack4_callback().set(m_cdic, FUNC(cdicdic_device::intack_r));
+
+	m_lcd->set_refresh_hz(50);
 
 	// IMS66490 CDIC input clocks are 22.5792 MHz and 19.3536 MHz
 	// DSP input clock is 7.5264 MHz
@@ -462,109 +460,35 @@ void cdi_state::cdimono1_base(machine_config &config)
 	CDI_SLAVE_HLE(config, m_slave_hle, 0);
 	m_slave_hle->int_callback().set(m_maincpu, FUNC(scc68070_device::in2_w));
 	m_slave_hle->atten_callback().set(m_cdic, FUNC(cdicdic_device::atten_w));
-
-	CDROM(config, m_cdrom);
-	m_cdrom->set_interface("cdrom");
-
-	/* sound hardware */
-	SPEAKER(config, "speaker", 2).front();
-
-	DMADAC(config, m_dmadac[0]);
-	m_dmadac[0]->add_route(ALL_OUTPUTS, "speaker", 1.0, 0);
-
-	DMADAC(config, m_dmadac[1]);
-	m_dmadac[1]->add_route(ALL_OUTPUTS, "speaker", 1.0, 1);
-
-	MK48T08(config, "mk48t08");
 }
 
 // CD-i model 220 (Mono-II, NTSC)
 void cdi_state::cdimono2(machine_config &config)
 {
-	SCC68070(config, m_maincpu, CLOCK_A);
+	cdi_base(config);
 	m_maincpu->set_addrmap(AS_PROGRAM, &cdi_state::cdimono2_mem);
 
-	MCD212(config, m_mcd212, CLOCK_A, m_plane_ram[0], m_plane_ram[1]);
-	m_mcd212->set_screen("screen");
-	m_mcd212->int_callback().set(m_maincpu, FUNC(scc68070_device::int1_w));
-
-	screen_device &screen(SCREEN(config, "screen", SCREEN_TYPE_RASTER));
-	screen.set_raw(14976000, 960, 0, 768, 312, 32, 312);
-	screen.set_video_attributes(VIDEO_UPDATE_SCANLINE);
-	screen.set_screen_update(m_mcd212, FUNC(mcd212_device::screen_update));
-
-	SCREEN(config, m_lcd, SCREEN_TYPE_RASTER);
 	m_lcd->set_refresh_hz(60);
-	m_lcd->set_vblank_time(ATTOSECONDS_IN_USEC(0));
-	m_lcd->set_size(192, 22);
-	m_lcd->set_visarea(0, 192-1, 0, 22-1);
-	m_lcd->set_screen_update(FUNC(cdi_state::screen_update_cdimono1_lcd));
-
-	PALETTE(config, "palette").set_entries(0x100);
-
-	config.set_default_layout(layout_cdi);
 
 	M68HC05C8(config, m_servo, 4_MHz_XTAL);
 	M68HC05C8(config, m_slave, 4_MHz_XTAL);
 
-	CDROM(config, m_cdrom).set_interface("cdrom");
 	SOFTWARE_LIST(config, "cd_list").set_original("cdi").set_filter("!DVC");
 	SOFTWARE_LIST(config, "photocd_list").set_compatible("photo_cd");
-
-	/* sound hardware */
-	SPEAKER(config, "speaker", 2).front();
-
-	DMADAC(config, m_dmadac[0]);
-	m_dmadac[0]->add_route(ALL_OUTPUTS, "speaker", 1.0, 0);
-
-	DMADAC(config, m_dmadac[1]);
-	m_dmadac[1]->add_route(ALL_OUTPUTS, "speaker", 1.0, 1);
-
-	MK48T08(config, "mk48t08");
 }
 
 void cdi_state::cdi910(machine_config &config)
 {
-	SCC68070(config, m_maincpu, CLOCK_A);
+	cdi_base(config);
 	m_maincpu->set_addrmap(AS_PROGRAM, &cdi_state::cdi910_mem);
 
-	MCD212(config, m_mcd212, CLOCK_A, m_plane_ram[0], m_plane_ram[1]);
-	m_mcd212->set_screen("screen");
-	m_mcd212->int_callback().set(m_maincpu, FUNC(scc68070_device::int1_w));
-
-	screen_device &screen(SCREEN(config, "screen", SCREEN_TYPE_RASTER));
-	screen.set_raw(14976000, 960, 0, 768, 312, 32, 312);
-	screen.set_video_attributes(VIDEO_UPDATE_SCANLINE);
-	screen.set_screen_update(m_mcd212, FUNC(mcd212_device::screen_update));
-
-	SCREEN(config, m_lcd, SCREEN_TYPE_RASTER);
 	m_lcd->set_refresh_hz(60);
-	m_lcd->set_vblank_time(ATTOSECONDS_IN_USEC(0));
-	m_lcd->set_size(192, 22);
-	m_lcd->set_visarea(0, 192-1, 0, 22-1);
-	m_lcd->set_screen_update(FUNC(cdi_state::screen_update_cdimono1_lcd));
-
-	PALETTE(config, "palette").set_entries(0x100);
-
-	config.set_default_layout(layout_cdi);
 
 	M68HC05C8(config, m_servo, 4_MHz_XTAL);
 	M68HC05C8(config, m_slave, 4_MHz_XTAL);
 
-	CDROM(config, "cdrom").set_interface("cdrom");
 	SOFTWARE_LIST(config, "cd_list").set_original("cdi").set_filter("!DVC");
 	SOFTWARE_LIST(config, "photocd_list").set_compatible("photo_cd");
-
-	/* sound hardware */
-	SPEAKER(config, "speaker", 2).front();
-
-	DMADAC(config, m_dmadac[0]);
-	m_dmadac[0]->add_route(ALL_OUTPUTS, "speaker", 1.0, 0);
-
-	DMADAC(config, m_dmadac[1]);
-	m_dmadac[1]->add_route(ALL_OUTPUTS, "speaker", 1.0, 1);
-
-	MK48T08(config, "mk48t08");
 }
 
 // CD-i Mono-I, with CD-ROM image device (MESS) and Software List (MESS)
@@ -590,13 +514,13 @@ void quizard_state::quizard(machine_config &config)
 	m_maincpu->uart_tx_callback().set(FUNC(quizard_state::mcu_rx_from_cpu));
 
 	I8751(config, m_mcu, 11.0592_MHz_XTAL);
-	m_mcu->port_in_cb<0>().set(FUNC(quizard_state::mcu_p0_r));
+	m_mcu->port_in_cb<0>().set(FUNC(quizard_state::mcu_p_r<0>));
 	m_mcu->port_in_cb<1>().set(FUNC(quizard_state::mcu_p1_r));
-	m_mcu->port_in_cb<2>().set(FUNC(quizard_state::mcu_p2_r));
+	m_mcu->port_in_cb<2>().set(FUNC(quizard_state::mcu_p_r<2>));
 	m_mcu->port_in_cb<3>().set(FUNC(quizard_state::mcu_p3_r));
-	m_mcu->port_out_cb<0>().set(FUNC(quizard_state::mcu_p0_w));
-	m_mcu->port_out_cb<1>().set(FUNC(quizard_state::mcu_p1_w));
-	m_mcu->port_out_cb<2>().set(FUNC(quizard_state::mcu_p2_w));
+	m_mcu->port_out_cb<0>().set(FUNC(quizard_state::mcu_p_w<0>));
+	m_mcu->port_out_cb<1>().set(FUNC(quizard_state::mcu_p_w<1>));
+	m_mcu->port_out_cb<2>().set(FUNC(quizard_state::mcu_p_w<2>));
 	m_mcu->port_out_cb<3>().set(FUNC(quizard_state::mcu_p3_w));
 
 	m_slave_hle->read_mousebtn().set(FUNC(quizard_state::mcu_button_press));
