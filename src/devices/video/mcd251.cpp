@@ -344,6 +344,10 @@ void mcd251_device::video_decode_pending()
 		case mpeg_video::decode_result::NEED_DATA:
 			// see "request for bits"
 			m_video_needs_data = true;
+			if (m_store_decoding < 0 && taken == m_video_es.size())
+			{
+				m_pictures_in_input_fifo = m_reference_held ? 1 : 0;
+			}
 			break;
 		}
 
